@@ -1,22 +1,78 @@
 from dotenv import load_dotenv
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.vectorstores import Chroma
 from langchain_mistralai import ChatMistralAI
-from langchain_community.document_loaders import PyPDFLoader
 from langchain_core.prompts import ChatPromptTemplate
 
-load_dotenv()  
+load_dotenv()
 
-data = PyPDFLoader("document loaders/GRU.pdf")
-docs = data.load()
+embedding_model = HuggingFaceEmbeddings(
+    model_name="sentence-transformers/all-MiniLM-L6-v2"
+)
 
-template = ChatPromptTemplate.from_messages([
-    ("system" , "You are a AI that summarizes the text provided to you."),
-    ("human" , "{data}")
-])
+vectorstore= Chroma(
+    persist_directory="Chroma_db",
+    embedding_function=embedding_model
+)
 
-model = ChatMistralAI(model = "mistral-small-2506")
+retriever = vectorstore.as_retriever(
+    search_type = "mmr",
+    search_kwargs = {
+        "k" : 4,
+        "fetch_k":10,
+        "lambda_mult":0.5
+    }
+)
 
-prompt = template.format_messages(data = docs)
+llm = ChatMistralAI(
+    model = "mistral-small-2506"
+)
 
-result = model.invoke(prompt)
+# Prompt Template
+prompt = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            """You are a helpful AI assistant.
 
-print(result.content)
+Use ONLY the provided context to answer the question.
+
+If the answer is not present in the context,
+say: "I could not find the answer in the document."
+"""
+        ),
+        (
+            "human",
+            """Context:
+{context}
+
+Question:
+{question}
+"""
+        )
+    ]
+)
+
+print("Rag system created")
+
+print("press 0 to exit")
+
+while True:
+    query = input("You: ")
+    if query == "0":
+        break
+
+    docs = retriever.invoke(query)
+
+    context = "\n\n".join(
+        [doc.page_content for doc in docs]
+    )
+
+    final_prompt = prompt.invoke({
+        "context": context,
+        "question":query
+    })
+
+    response = llm.invoke(final_prompt)
+
+    print(f"\n AI: {response.content}")
